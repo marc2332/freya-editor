@@ -52,7 +52,7 @@ pub struct EditorScrollViewProps<'a, Builder, BuilderArgs> {
     builder: Builder,
 }
 
-fn get_render_range(
+pub fn get_render_range(
     viewport_size: f32,
     scroll_position: f32,
     item_size: f32,

@@ -1,6 +1,8 @@
 use std::borrow::Cow;
 use std::cell;
 use std::cmp::Ordering;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use freya::prelude::*;
 use skia_safe::scalar;
@@ -17,7 +19,7 @@ use crate::parser::*;
 pub struct UseMetrics {
     paragraph_style: ParagraphStyle,
     font_collection: FontCollection,
-    metrics: UseRef<(SyntaxBlocks, f32)>,
+    metrics: UseRef<(Arc<Mutex<SyntaxBlocks>>, f32)>,
     manager: UseManager,
     pane_index: usize,
     editor_index: usize,
@@ -26,7 +28,7 @@ pub struct UseMetrics {
 impl UseMetrics {
     pub fn new(
         manager: UseManager,
-        metrics: UseRef<(SyntaxBlocks, f32)>,
+        metrics: UseRef<(Arc<Mutex<SyntaxBlocks>>, f32)>,
         pane_index: usize,
         editor_index: usize,
     ) -> Self {
@@ -48,7 +50,7 @@ impl UseMetrics {
         }
     }
 
-    pub fn get(&self) -> cell::Ref<(SyntaxBlocks, f32)> {
+    pub fn get(&self) -> cell::Ref<(Arc<Mutex<SyntaxBlocks>>, f32)> {
         self.metrics.read()
     }
 
@@ -91,7 +93,7 @@ impl UseMetrics {
 
         let (syntax_blocks, width) = &mut *self.metrics.write();
 
-        parse(editor.rope(), syntax_blocks);
+        parse(editor.rope(), &mut syntax_blocks.lock().unwrap());
         *width = paragraph.longest_line();
     }
 }
@@ -102,7 +104,7 @@ pub fn use_metrics<'a>(
     pane_index: usize,
     editor_index: usize,
 ) -> &'a UseMetrics {
-    let metrics_ref = use_ref::<(SyntaxBlocks, f32)>(cx, || (SyntaxBlocks::default(), 0.0));
+    let metrics_ref = use_ref::<(Arc<Mutex<SyntaxBlocks>>, f32)>(cx, || (Arc::default(), 0.0));
 
     cx.use_hook(|| {
         let metrics = UseMetrics::new(

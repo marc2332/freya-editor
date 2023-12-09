@@ -7,7 +7,6 @@ use crate::hooks::*;
 use crate::lsp::LanguageId;
 use crate::lsp::LspConfig;
 use crate::tabs::editor::hooks::use_lsp;
-use crate::tabs::editor::BuilderProps;
 use crate::tabs::editor::EditorLine;
 
 use freya::prelude::events::KeyboardEvent;
@@ -15,7 +14,18 @@ use freya::prelude::keyboard::Key;
 use freya::prelude::keyboard::Modifiers;
 use freya::prelude::*;
 
+use freya_node_state::Parse;
 use lsp_types::Url;
+use skia_safe::textlayout::ParagraphBuilder;
+use skia_safe::textlayout::ParagraphStyle;
+use skia_safe::textlayout::TextAlign;
+use skia_safe::textlayout::TextStyle;
+use skia_safe::Color;
+use skia_safe::Font;
+use skia_safe::FontStyle;
+use skia_safe::Paint;
+use skia_safe::PaintStyle;
+use skia_safe::Typeface;
 
 static LINES_JUMP_ALT: usize = 5;
 static LINES_JUMP_CONTROL: usize = 3;
@@ -140,7 +150,8 @@ pub fn EditorTab(cx: Scope<EditorTabProps>) -> Element {
             if is_panel_focused && is_editor_focused {
                 let current_scroll = scroll_offsets.read().1;
                 let lines_jump = (manual_line_height * LINES_JUMP_ALT as f32).ceil() as i32;
-                let min_height = -(metrics.get().0.len() as f32 * manual_line_height) as i32;
+                let min_height =
+                    -(metrics.get().0.lock().unwrap().len() as f32 * manual_line_height) as i32;
                 let max_height = 0; // TODO, this should be the height of the viewport
 
                 let events = match &e.key {
@@ -179,6 +190,14 @@ pub fn EditorTab(cx: Scope<EditorTabProps>) -> Element {
     let cursor = editor.cursor();
     let file_uri = Url::from_file_path(path).unwrap();
 
+    let editor_scroll = scroll_offsets.read().1 as f32;
+
+    let minimap_scroll = if editor_scroll < -600.0 {
+        editor_scroll + 600.0
+    } else {
+        0.0
+    };
+
     render!(
         rect {
             width: "100%",
@@ -191,13 +210,14 @@ pub fn EditorTab(cx: Scope<EditorTabProps>) -> Element {
             background: "rgb(40, 40, 40)",
             padding: "5 0 0 5",
             EditorScrollView {
+                width: "calc(100% - 150)",
                 offset_x: scroll_offsets.read().0,
                 offset_y: scroll_offsets.read().1,
                 onscroll: onscroll,
-                length: metrics.get().0.len(),
+                length: metrics.get().0.lock().unwrap().len(),
                 item_size: manual_line_height,
-                builder_args: (cursor, metrics.clone(), editable, lsp.clone(), file_uri, editor.rope().clone(), hover_location.clone(), cursor_coords.clone(), debouncer.clone()),
-                builder: move |i, options: BuilderProps| rsx!(
+                builder_args: (cursor.clone(), metrics.clone(), editable.clone(), lsp.clone(), file_uri, editor.rope().clone(), hover_location.clone(), cursor_coords.clone(), debouncer.clone()),
+                builder: move |i, options| rsx!(
                     EditorLine {
                         key: "{i}",
                         line_index: i,
@@ -207,6 +227,114 @@ pub fn EditorTab(cx: Scope<EditorTabProps>) -> Element {
                     }
                 )
             }
+
+            Minimap {
+                scroll_offsets: scroll_offsets.clone(),
+                editable: editable,
+                rope: editor.rope().clone()
+            }
         }
     )
+}
+
+#[derive(Props)]
+pub struct MinimapProps {
+    scroll_offsets: UseRef<(i32, i32)>,
+    editable: UseEdit,
+    rope: Rope,
+}
+
+impl PartialEq for MinimapProps {
+    fn eq(&self, other: &Self) -> bool {
+        self.scroll_offsets == other.scroll_offsets
+    }
+}
+
+#[allow(non_snake_case)]
+fn Minimap(cx: Scope<MinimapProps>) -> Element {
+    let metrics = &cx.props.editable.metrics;
+
+    let canvas = use_canvas(cx, (&cx.props.scroll_offsets.read().1,), |(scroll_y,)| {
+        let blocks = metrics.get().0.clone();
+        let rope = cx.props.rope.clone();
+        Box::new(move |canvas, font_collection, area| {
+            canvas.translate((area.min_x(), area.min_y()));
+
+            let mut paragraph_style = ParagraphStyle::default();
+            let mut text_style = TextStyle::new();
+            text_style.set_font_size(3.0);
+            paragraph_style.set_text_style(&text_style);
+
+            let items_len = rope.len_lines();
+            let editor_inner_size = (17.0 * 1.2) + ((17.0 * 1.2) * items_len as f32);
+
+            let editor_corrected_scrolled_y =
+                get_corrected_scroll_position(editor_inner_size, area.height(), scroll_y as f32);
+
+            let editor_range = get_render_range(
+                area.height(),
+                editor_corrected_scrolled_y,
+                17.0,
+                items_len as f32,
+            );
+
+            let minimap_inner_size = 3.0 * items_len as f32;
+
+            let editor_position_percentage =
+                (-editor_corrected_scrolled_y / editor_inner_size) * 100.0;
+            let minimap_position = -(minimap_inner_size * (editor_position_percentage / 100.0));
+
+            let minimap_corrected_scrolled_y =
+                get_corrected_scroll_position(minimap_inner_size, area.height(), minimap_position);
+
+            let minimap_range = get_render_range(
+                area.height(),
+                minimap_corrected_scrolled_y,
+                3.0,
+                items_len as f32,
+            );
+
+            let blocks = blocks.lock().unwrap();
+
+            for (i, n) in minimap_range.enumerate() {
+                let y = i as f32 * 3.0;
+                let mut paragrap_builder = ParagraphBuilder::new(&paragraph_style, font_collection);
+                let line = blocks.get_line(n);
+                for (syntax, word) in line {
+                    let mut text_style = TextStyle::new();
+                    text_style.set_color(Color::parse(syntax.color()).unwrap());
+                    text_style.set_font_size(3.0);
+                    text_style.set_font_families(&["Jetbrains Mono"]);
+                    paragrap_builder.push_style(&text_style);
+                    let text = word.to_string(&rope);
+                    paragrap_builder.add_text(text);
+                }
+                let mut paragraph = paragrap_builder.build();
+
+                paragraph.layout(area.width());
+                paragraph.paint(canvas, (0.0, y));
+            }
+
+            let start_y = editor_range.start as f32 * 3.0;
+            let end_y = editor_range.end as f32 * 3.0;
+
+            let mut paint = Paint::default();
+            paint.set_style(PaintStyle::Fill);
+            paint.set_color(Color::from_argb(100, 255, 255, 255));
+
+            canvas.draw_rect(
+                skia_safe::Rect::new(0.0, start_y, area.width(), end_y),
+                &paint,
+            );
+
+            canvas.restore();
+        })
+    });
+
+    render!(rect {
+        width: "100%",
+        height: "100%",
+        background: "transparent",
+        canvas_reference: canvas.attribute(cx)
+    })
 }

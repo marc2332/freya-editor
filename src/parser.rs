@@ -5,7 +5,7 @@ use smallvec::SmallVec;
 
 const LARGE_FILE: usize = 45_000_000;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum SyntaxType {
     String,
     Keyword,
@@ -49,7 +49,7 @@ impl From<SyntaxSemantic> for SyntaxType {
 
 pub type SyntaxLine = SmallVec<[(SyntaxType, Range<usize>); 8]>;
 
-#[derive(Default)]
+#[derive(Default, PartialEq, Clone)]
 pub struct SyntaxBlocks {
     blocks: Vec<SmallVec<[(SyntaxType, Range<usize>); 8]>>,
 }

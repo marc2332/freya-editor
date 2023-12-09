@@ -109,7 +109,10 @@ pub fn EditorLine(cx: Scope<EditorLineProps>) -> Element {
 
     let gutter_width = font_size * 3.0;
     let (syntax_blocks, width) = &*metrics.get();
-    let line = syntax_blocks.get_line(*line_index);
+    let line = {
+        let blocks = syntax_blocks.lock().unwrap();
+        blocks.get_line(*line_index).to_vec()
+    };
     let highlights_attr = editable.highlights_attr(cx, *line_index);
 
     let is_line_selected = cursor.row() == *line_index;
